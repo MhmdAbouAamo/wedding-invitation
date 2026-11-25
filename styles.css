@@ -167,7 +167,7 @@ body.started .startScreen {
   opacity: 0;
   pointer-events: none;
   transition: opacity 800ms ease;
-  padding: 40px 0;
+  padding: 0;
 }
 body.started .hero {
   opacity: 1;
@@ -176,10 +176,16 @@ body.started .hero {
 
 .envelopeStage {
   width: 100%;
-  height: 100vh;
+  min-height: 100vh;
   padding: 0;
   display: grid;
   place-items: center;
+}
+/* Envelope and card share the same grid cell so the card
+   appears where the envelope was instead of below it. */
+.envelopeStage > .envelope,
+.envelopeStage > .inviteCard {
+  grid-area: 1 / 1;
 }
 
 /* Base creamy paper */
@@ -227,23 +233,6 @@ body.started .hero {
   will-change: transform;
 }
 
-body.opening .envelope--classic .flap.backTop {
-  opacity: 1 !important;
-  animation: flapOpen3s 2000ms cubic-bezier(.18,.85,.22,1) forwards !important;
-}
-
-@keyframes flapOpen3s {
-  0%   { transform: rotateX(0deg); }
-  100% { transform: rotateX(-145deg); }
-}
-
-body.opening .envelope--classic {
-  animation: envFade3s 450ms ease forwards !important;
-  animation-delay: 1550ms !important;
-}
-@keyframes envFade3s {
-  to { opacity: 0; transform: translateY(-10px) scale(0.985); pointer-events: none; }
-}
 
 body.lang-ar .envelope--classic .tapText .en { display: none; }
 body.lang-ar .envelope--classic .tapText .ar { display: inline; }
@@ -321,7 +310,7 @@ body.opening .envelope--classic .wax-seal {
 }
 .inviteCard {
   width: min(520px, 92vw);
-  margin-top: 18px;
+  margin: 40px 0;
   opacity: 0;
   transform: translateY(18px);
   pointer-events: none;
@@ -567,6 +556,7 @@ select option { color: #111; }
   width: fit-content;
 }
 .btn:hover { transform: translateY(-1px); background: rgba(214,180,107,0.28); }
+.btn:disabled { opacity: .6; cursor: default; transform: none; }
 .btn.primary {
   width: 100%;
   background: linear-gradient(135deg, rgba(214,180,107,0.30), rgba(242,230,201,0.22));
@@ -667,7 +657,7 @@ body.lang-ar p.ar { display: block; }
   color: var(--champagne);
   opacity: 0;
   transform: translateY(2px);
-  font-size: max(12px, 2.6vw);
+  font-size: clamp(11px, 3vw, 18px);
   transition: opacity 350ms ease, transform 350ms ease;
 }
 .scratchItem.done .scratchValue .val {
@@ -727,7 +717,7 @@ body.lang-ar p.ar { display: block; }
   background: linear-gradient(145deg, #e6c58c, #b8863b);
   color: white;
   font-weight: 500;
-  font-family: 'playfair display', 'didot' serif;
+  font-family: 'Playfair Display', 'Didot', serif;
   font-size: 0.9rem;
   text-transform: uppercase;
   letter-spacing: 1px;
@@ -790,7 +780,7 @@ box-shadow: 0 8px 20px rgba(184,134,59,0.3); }
   opacity: 1 !important;
   backface-visibility: hidden !important;
   box-shadow: 0 5px 15px rgba(0,0,0,0.05) !important;
-  transition: transform 3000ms cubic-bezier(0.4, 0, 0.2, 1) !important;
+  transition: transform 1400ms cubic-bezier(0.4, 0, 0.2, 1) !important;
 }
 
 body.opening .envelope--classic .flap.backTop {
@@ -798,8 +788,8 @@ body.opening .envelope--classic .flap.backTop {
 }
 
 body.opening .envelope--classic {
-  animation: envFade3s 600ms ease forwards !important;
-  animation-delay: 2400ms !important;
+  animation: envFade3s 450ms ease forwards !important;
+  animation-delay: 1550ms !important;
 }
 @keyframes envFade3s {
   to {
