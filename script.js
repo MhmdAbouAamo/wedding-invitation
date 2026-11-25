@@ -11,23 +11,47 @@ const envelope = document.getElementById("envelope");
 const sealBtn = document.querySelector(".sealBtn");
 const musicBtn = document.getElementById("musicBtn");
 
+// localStorage can throw (private mode, blocked storage) — never let that break the page
+function storageGet(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function storageSet(key, value) {
+  try { localStorage.setItem(key, value); } catch { /* ignore */ }
+}
+
+function updateMusicBtn() {
+  if (!musicBtn || !bgMusic) return;
+  const audible = !bgMusic.paused && !bgMusic.muted;
+  musicBtn.textContent = audible ? "🔊 Music" : "🔇 Music";
+}
+
+function playMusic() {
+  if (!bgMusic) return;
+  bgMusic.play().then(updateMusicBtn).catch(updateMusicBtn);
+}
+
 // Restore previous choice
-const savedMuted = localStorage.getItem("musicMuted") === "1";
-if (bgMusic) bgMusic.muted = savedMuted;
-if (musicBtn) musicBtn.textContent = savedMuted ? "🔇 Music" : "🔊 Music";
+if (bgMusic) {
+  bgMusic.muted = storageGet("musicMuted") === "1";
+  bgMusic.addEventListener("play", updateMusicBtn);
+  bgMusic.addEventListener("pause", updateMusicBtn);
+  bgMusic.addEventListener("volumechange", updateMusicBtn);
+}
+updateMusicBtn();
 
 musicBtn?.addEventListener("click", () => {
   if (!bgMusic) return;
 
-  bgMusic.muted = !bgMusic.muted;
-
-  // If unmuting and still paused, start it (some browsers require user click — this is a click ✅)
-  if (!bgMusic.muted && bgMusic.paused) {
-    bgMusic.play().catch(() => {});
+  if (bgMusic.paused || bgMusic.muted) {
+    // Not audible: unmute and make sure it is actually playing (this click is a user gesture)
+    bgMusic.muted = false;
+    if (bgMusic.paused) playMusic();
+  } else {
+    bgMusic.muted = true;
   }
 
-  localStorage.setItem("musicMuted", bgMusic.muted ? "1" : "0");
-  musicBtn.textContent = bgMusic.muted ? "🔇 Music" : "🔊 Music";
+  storageSet("musicMuted", bgMusic.muted ? "1" : "0");
+  updateMusicBtn();
 });
 
 /* =========================
@@ -41,8 +65,17 @@ function stopMusic() {
   bgMusic.currentTime = 0;
 }
 
+// Pause while the tab is in the background and resume when the guest comes back
+let resumeOnVisible = false;
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) stopMusic();
+  if (!bgMusic) return;
+  if (document.hidden) {
+    resumeOnVisible = !bgMusic.paused;
+    bgMusic.pause();
+  } else if (resumeOnVisible) {
+    resumeOnVisible = false;
+    playMusic();
+  }
 });
 
 window.addEventListener("pagehide", stopMusic);
@@ -72,17 +105,14 @@ function openInvite() {
   document.body.classList.add("opening");
 
   // start music
-  if (bgMusic && bgMusic.paused) {
-    bgMusic.play().catch(() => {});
-  }
+  if (bgMusic && bgMusic.paused) playMusic();
 
   setTimeout(() => {
     document.body.classList.add("opened");
   }, 1450);
 
+  // The fade itself is the CSS envFade3s animation (delay 1550ms, 450ms long)
   setTimeout(() => {
-    envelope.style.opacity = "0";
-    envelope.style.transform = "translateY(-10px) scale(0.985)";
     envelope.style.pointerEvents = "none";
   }, 1550);
 
@@ -100,7 +130,10 @@ sealBtn?.addEventListener("click", (e) => {
 });
 
 envelope?.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" || e.key === " ") openInvite();
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault(); // stop Space from scrolling / Enter from also clicking the seal
+    openInvite();
+  }
 });
 
 /* =========================
@@ -113,11 +146,35 @@ langBtn?.addEventListener("click", () => {
 /* =========================
    WHISH COPY
    ========================= */
+function fallbackCopy(text) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  ta.setSelectionRange(0, text.length);
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch { ok = false; }
+  document.body.removeChild(ta);
+  if (!ok) throw new Error("Copy command failed");
+}
+
 whishCopyBtn?.addEventListener("click", async () => {
   const textToCopy = whishCopyBtn.dataset.copy;
 
   try {
-    await navigator.clipboard.writeText(textToCopy);
+    // Clipboard API is only available on HTTPS/localhost; fall back otherwise
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(textToCopy);
+      } catch {
+        fallbackCopy(textToCopy);
+      }
+    } else {
+      fallbackCopy(textToCopy);
+    }
 
     if (whishMsg) {
       whishMsg.textContent = document.body.classList.contains("lang-ar")
@@ -133,7 +190,12 @@ whishCopyBtn?.addEventListener("click", async () => {
       );
     }
   } catch (err) {
-    if (whishMsg) whishMsg.textContent = "Copy failed";
+    // Show the number so it can still be copied manually
+    if (whishMsg) {
+      whishMsg.textContent = document.body.classList.contains("lang-ar")
+        ? `تعذّر النسخ — رقم الحساب: ${textToCopy}`
+        : `Copy failed — account number: ${textToCopy}`;
+    }
     console.warn(err);
   }
 });
@@ -151,14 +213,17 @@ function initScratchCircles() {
 
     const threshold = parseFloat(canvas.dataset.threshold || "0.45");
 
-    // Pull sizing data dynamically from bounding dimensions instead of fixed 140px variables
-    const rectSize = canvas.getBoundingClientRect().width || 140;
-    const dpr = window.devicePixelRatio || 1;
-
-    canvas.width = Math.floor(rectSize * dpr);
-    canvas.height = Math.floor(rectSize * dpr);
-
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    let rectSize = 0;
+    let dpr = 1;
+
+    // Size the backing store from the rendered (CSS) size
+    function sizeCanvas() {
+      rectSize = canvas.clientWidth || 140;
+      dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(rectSize * dpr);
+      canvas.height = Math.floor(rectSize * dpr);
+    }
 
     function drawCover() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -183,6 +248,7 @@ function initScratchCircles() {
       ctx.restore();
     }
 
+    sizeCanvas();
     drawCover();
 
     let isDown = false;
@@ -207,14 +273,25 @@ function initScratchCircles() {
       ctx.restore();
     }
 
+    // Ratio of the CIRCLE that has been scratched. The square corners outside
+    // the circle are transparent from the start, so they must not be counted.
     function clearedRatio() {
-      const img = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      const w = canvas.width;
+      const h = canvas.height;
+      const img = ctx.getImageData(0, 0, w, h).data;
+      const cx = w / 2, cy = h / 2, r2 = (w / 2) * (w / 2);
+      const step = 3;
+      let total = 0;
       let transparent = 0;
-      const step = 40;
-      for (let i = 3; i < img.length; i += step) {
-        if (img[i] === 0) transparent++;
+      for (let y = 0; y < h; y += step) {
+        for (let x = 0; x < w; x += step) {
+          const dx = x - cx, dy = y - cy;
+          if (dx * dx + dy * dy > r2) continue;
+          total++;
+          if (img[(y * w + x) * 4 + 3] === 0) transparent++;
+        }
       }
-      return transparent / (img.length / step);
+      return total ? transparent / total : 0;
     }
 
     function tryReveal() {
@@ -232,7 +309,7 @@ function initScratchCircles() {
 
         setTimeout(() => ctx.clearRect(0, 0, canvas.width, canvas.height), 360);
 
-        const allDone = document.querySelectorAll(".scratchItem.done").length === 3;
+        const allDone = document.querySelectorAll(".scratchItem.done").length === canvases.length;
         if (allDone && finalEl) finalEl.classList.remove("hidden");
       }
     }
@@ -262,8 +339,16 @@ function initScratchCircles() {
       tryReveal();
     });
 
-    // Force background covers to rebuild dynamically if browser configurations shift
-    window.addEventListener("resize", drawCover);
+    // Only rebuild when the circle's size actually changes. Mobile browsers fire
+    // "resize" while scrolling (address bar), which used to wipe scratch progress.
+    window.addEventListener("resize", () => {
+      if (revealed) return;
+      const newSize = canvas.clientWidth || 140;
+      const newDpr = window.devicePixelRatio || 1;
+      if (Math.abs(newSize - rectSize) < 1 && newDpr === dpr) return;
+      sizeCanvas();
+      drawCover();
+    });
   });
 }
 
@@ -289,17 +374,22 @@ rsvpForm?.addEventListener("submit", async (e) => {
   const guests = document.getElementById("rsvpGuests").value;
   const note = document.getElementById("rsvpNote").value.trim();
 
+  const sendBtn = document.getElementById("rsvpSendBtn");
+
   if (!name || !status) {
     rsvpMsg.textContent = document.body.classList.contains("lang-ar") ? "يرجى ملء الحقول المطلوبة." : "Please complete required fields.";
     return;
   }
 
+  if (sendBtn) sendBtn.disabled = true; // prevent duplicate submissions
+
   try {
+    // In no-cors mode only "simple" content types are allowed, so send JSON as text/plain
     await fetch(GOOGLE_SCRIPT_URL, {
       method: "POST",
       mode: "no-cors",
       headers: {
-        "Content-Type": "application/json"
+        "Content-Type": "text/plain;charset=utf-8"
       },
       body: JSON.stringify({
         name,
@@ -315,5 +405,7 @@ rsvpForm?.addEventListener("submit", async (e) => {
   } catch (err) {
     rsvpMsg.textContent = document.body.classList.contains("lang-ar") ? "عذراً، حدث خطأ ما." : "Something went wrong.";
     console.error(err);
+  } finally {
+    if (sendBtn) sendBtn.disabled = false;
   }
 });
